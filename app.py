@@ -259,32 +259,31 @@ class JuliaAgent(AgentBase):
 
         self.prompt_add_section(
             "Identity",
-            "You are Julia, a patient and polite voice assistant tasked with "
-            "guiding senior citizen callers through eligibility verification "
-            "and data collection before connecting them to a live agent."
+            "You are Julia, a patient and polite voice assistant. You collect "
+            "eligibility information from senior citizen callers, then connect "
+            "them to a live agent."
         )
 
         self.prompt_add_section(
             "Style",
             bullets=[
-                "Be polite, warm, and friendly throughout the entire interaction.",
-                "Speak clearly and patiently, considering the needs of senior citizens.",
-                "If asked about the allowance card benefit, tell them we only need "
-                "to know their age and zipcode, then we'll connect them with a live "
-                "agent who can answer any questions.",
+                "Be polite and friendly. Use short, simple sentences.",
+                "Ask one question at a time and wait for the answer.",
+                "If asked about the allowance card benefit, explain that we only "
+                "need their age and zipcode, and the live agent can answer any "
+                "questions.",
             ]
         )
 
         self.prompt_add_section(
             "Response Guidelines",
             bullets=[
-                "Do not verify answers unless they seem incomplete, unclear, or "
-                "affected by background noise.",
-                "Address background noise by politely asking the caller to move to "
-                "a quieter location.",
-                "Do not repeat the caller's name back to them, since we do not need "
-                "it to be accurate or correct, and we don't want to spend time "
-                "correcting it if it was heard or recorded incorrectly.",
+                "Do not confirm answers unless they seem incomplete or unclear.",
+                "If a response is garbled, ask the caller to repeat it. If it "
+                "keeps happening, politely ask them to move somewhere quieter.",
+                "Never repeat the caller's name back to them.",
+                "Scripted questions and the goodbye are played automatically "
+                "after you save data - never repeat them yourself.",
                 "Never mention tools, functions, or systems to the caller.",
             ]
         )
@@ -293,46 +292,31 @@ class JuliaAgent(AgentBase):
             "Task and Goals",
             "Follow these steps in order:",
             bullets=[
-                "Greet the caller warmly and ask for their name. When they give it, "
-                "call save_caller_name to store it. Do not repeat the name back to them.",
-                "Say: \"Nice to meet you, and thank you for calling today. Are you "
-                "calling about the allowance card available with Medicare?\"",
-                "Call save_inquiry_type with their answer. If the answer is yes or "
-                "positive, proceed with the call. If the answer is no or negative, "
-                "quickly explain that this is a hotline to get qualified for the "
-                "Part B giveback benefit provided by Medicare, then continue.",
-                "Ask for the caller's zip code and wait for their response, then "
-                "call save_zip_code to store it. The zip code must contain 5 digits; "
-                "otherwise ask for repetition. The caller may give the number as "
-                "two-digit or three-digit groups (for example \"two-thirty, "
-                "forty-seven\" when they mean 23047), so attempt to interpret the "
-                "response that way before asking for confirmation. Do not explain to "
-                "the caller how they may say the zipcode; just interpret their "
-                "response. If the caller includes the word \"dash\" or gives more "
-                "than 5 digits, let them know that we only need their 5 digit "
-                "zipcode. If the caller says \"Oh\" or \"O\" as part of the "
-                "response, interpret that as a zero. Re-ask the question if needed.",
-                "Say: \"Thank you. Can I get your current age?\"",
-                "Wait for the caller's age and call save_age to store it. Ensure the "
-                "age recorded is a two-digit number. If the answer is unclear or "
-                "ambiguous, ask for clarification.",
-                "Once the ZIP code and age are both saved, immediately call "
-                "transfer_to_agent. The system will speak the goodbye message and "
-                "transfer the call automatically - do NOT say any goodbye or "
-                "transfer message yourself.",
+                "Greet the caller and ask for their name. When they give it, "
+                "call save_caller_name.",
+                "When the caller answers the allowance card question, call "
+                "save_inquiry_type. If the answer was negative, briefly explain "
+                "this is a hotline to get qualified for the Part B giveback "
+                "benefit provided by Medicare, then continue.",
+                "Ask for the caller's zip code. Callers may speak it in groups: "
+                "'two-thirty, forty-seven' means 23047. Interpret it silently - "
+                "never explain how to say a zip code. If they say 'dash' or give "
+                "more than 5 digits, tell them we only need their 5 digit zipcode.",
+                "Call save_zip_code with the interpreted 5-digit zip code.",
+                "When the caller states their age, call save_age. If the answer "
+                "is unclear, ask them to clarify.",
+                "After the zip code and age are saved, immediately call "
+                "transfer_to_agent.",
             ],
             numbered_bullets=True
         )
 
         self.prompt_add_section(
-            "Error Handling and Fallback",
+            "Error Handling",
             bullets=[
-                "If a response is unclear or garbled, gently inform the caller of "
-                "the difficulty in understanding and ask them to repeat their answer.",
-                "If affected by background noise, apologize for the inconvenience "
-                "and ask the caller to find a quieter space to continue.",
-                "If a save tool reports the data is invalid, politely re-ask the "
-                "question.",
+                "If a tool reports invalid data, politely re-ask that question.",
+                "If a response is unclear, say you had difficulty understanding "
+                "and ask the caller to repeat it.",
             ]
         )
 
@@ -340,10 +324,9 @@ class JuliaAgent(AgentBase):
             "Mandatory Final Order",
             "This final order is mandatory:",
             bullets=[
-                "Collect ZIP code and age.",
-                "Call transfer_to_agent. The system speaks the goodbye message and "
-                "transfers the call - never speak a goodbye or transfer message "
-                "yourself.",
+                "Collect and save the zip code and age.",
+                "Call transfer_to_agent. The system speaks the goodbye and "
+                "transfers the call.",
             ],
             numbered_bullets=True
         )
@@ -407,6 +390,13 @@ class JuliaAgent(AgentBase):
                     }
                 },
                 "required": ["name"]
+            },
+            fillers={
+                "en-US": [
+                    "Wonderful...",
+                    "Alright...",
+                    "Okay...",
+                ]
             }
         )
         def save_caller_name(args, raw_data):
@@ -417,10 +407,16 @@ class JuliaAgent(AgentBase):
             global_data["caller_name_saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
             result = SwaigFunctionResult(
-                "Name stored. Do not repeat the name back to the caller. "
-                "Continue to the next step."
+                "Name stored. The system is asking the caller whether they are "
+                "calling about the allowance card. Wait for their answer, then "
+                "call save_inquiry_type. Do not repeat the name back."
             )
             result.update_global_data(global_data)
+            # Scripted question - spoken verbatim by the platform, not the LLM
+            result.say(
+                "Nice to meet you, and thank you for calling today. Are you "
+                "calling about the allowance card available with Medicare?"
+            )
             return result
 
         # ─────────────────────────────────────────────────────────────────────
@@ -441,6 +437,13 @@ class JuliaAgent(AgentBase):
                     }
                 },
                 "required": ["about_allowance_card"]
+            },
+            fillers={
+                "en-US": [
+                    "Okay...",
+                    "I understand...",
+                    "Alright, thank you...",
+                ]
             }
         )
         def save_inquiry_type(args, raw_data):
@@ -451,11 +454,11 @@ class JuliaAgent(AgentBase):
             global_data["inquiry_saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
             if about_card:
-                response = "Stored. The caller is calling about the allowance card. Proceed with the call."
+                response = "Stored. Now ask the caller for their zip code."
             else:
-                response = ("Stored. Quickly explain that this is a hotline to get "
+                response = ("Stored. Briefly explain that this is a hotline to get "
                             "qualified for the Part B giveback benefit provided by "
-                            "Medicare, then continue to the zip code step.")
+                            "Medicare, then ask the caller for their zip code.")
 
             result = SwaigFunctionResult(response)
             result.update_global_data(global_data)
@@ -468,8 +471,8 @@ class JuliaAgent(AgentBase):
             name="save_zip_code",
             description="Store the caller's 5-digit zip code after interpreting "
                         "their spoken response (grouped digits like 'two-thirty "
-                        "forty-seven' mean 23047; 'oh' means zero). Call this as "
-                        "soon as you have interpreted a 5-digit zip code.",
+                        "forty-seven' mean 23047). Call this as soon as you have "
+                        "interpreted a 5-digit zip code.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -480,6 +483,13 @@ class JuliaAgent(AgentBase):
                     }
                 },
                 "required": ["zip_code"]
+            },
+            fillers={
+                "en-US": [
+                    "Let me write that down...",
+                    "Okay, noting that...",
+                    "One moment...",
+                ]
             }
         )
         def save_zip_code(args, raw_data):
@@ -500,9 +510,12 @@ class JuliaAgent(AgentBase):
                 global_data["data_complete"] = True
 
             result = SwaigFunctionResult(
-                "Zip code stored. Now say: \"Thank you. Can I get your current age?\""
+                "Zip code stored. The system is asking the caller for their age. "
+                "Wait for their answer, then call save_age."
             )
             result.update_global_data(global_data)
+            # Scripted question - spoken verbatim by the platform, not the LLM
+            result.say("Thank you. Can I get your current age?")
             return result
 
         # ─────────────────────────────────────────────────────────────────────
@@ -522,6 +535,13 @@ class JuliaAgent(AgentBase):
                     }
                 },
                 "required": ["age"]
+            },
+            fillers={
+                "en-US": [
+                    "Let me note that...",
+                    "Okay, saving that...",
+                    "One moment...",
+                ]
             }
         )
         def save_age(args, raw_data):

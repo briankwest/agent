@@ -50,15 +50,15 @@ The conversation follows a strict, ordered script (from `prompt.txt`). Every pie
 flowchart TD
     A(["Call answered"]) --> B["Julia greets warmly,<br/>asks for the caller's name"]
     B --> C[["save_caller_name"]]
-    C --> D["'Nice to meet you, and thank you for calling today.<br/>Are you calling about the allowance card<br/>available with Medicare?'"]
+    C --> D["say action — verbatim:<br/>'Nice to meet you, and thank you for calling today.<br/>Are you calling about the allowance card<br/>available with Medicare?'"]
     D --> E[["save_inquiry_type"]]
     E -->|"yes / positive"| G
-    E -->|"no / negative"| F["Quickly explain: this is a hotline to get<br/>qualified for the Part B giveback<br/>benefit provided by Medicare"]
-    F --> G["Ask for ZIP code<br/>(interpret grouped digits,<br/>'oh' means zero)"]
+    E -->|"no / negative"| F["Briefly explain: this is a hotline to get<br/>qualified for the Part B giveback<br/>benefit provided by Medicare"]
+    F --> G["Ask for ZIP code<br/>(interpret grouped digits)"]
     G --> H[["save_zip_code"]]
     H -->|"invalid: not 5 digits"| I["Politely re-ask for<br/>the 5-digit ZIP"]
     I --> H
-    H -->|"valid"| J["'Thank you. Can I get your current age?'"]
+    H -->|"valid"| J["say action — verbatim:<br/>'Thank you. Can I get your current age?'"]
     J --> K[["save_age"]]
     K -->|"invalid: not two digits"| L["Gently ask caller<br/>to clarify their age"]
     L --> K
@@ -70,10 +70,12 @@ flowchart TD
 Conversation rules baked into the prompt:
 
 - **Never repeat the caller's name back** — accuracy doesn't matter and correcting it wastes the caller's time.
-- **ZIP interpretation** — callers often speak ZIPs in groups ("two-thirty, forty-seven" → `23047`); "oh"/"O" is a zero; dashes or extra digits get a polite "we only need your 5-digit zipcode."
-- **Don't over-verify** — answers are only confirmed if they seem incomplete, unclear, or noise-affected.
-- **Background noise** — apologize and ask the caller to move somewhere quieter.
+- **ZIP interpretation** — callers often speak ZIPs in groups ("two-thirty, forty-seven" → `23047`); dashes or extra digits get a polite "we only need your 5-digit zipcode."
+- **Don't over-verify** — answers are only confirmed if they seem incomplete or unclear.
+- **Garbled input** — ask the caller to repeat; if it keeps happening, ask them to move somewhere quieter.
 - If asked about the benefit itself, Julia explains we only need age and ZIP, and the live agent can answer everything else.
+
+The prompt deliberately contains **only things the LLM can act on** — word choice, question order, tool calls. Everything else lives in the right layer instead: vocal tone comes from the TTS voice, spoken-digit normalization ("oh" → 0) happens in speech recognition before the LLM sees text, and every verbatim scripted line (the allowance-card question, the age question, the goodbye) is a `say` action attached to a tool result, so the model never has to reproduce a sentence exactly.
 
 The **mandatory final order** is enforced twice — once in the prompt, and once in code (the `transfer_to_agent` guard): collect ZIP and age, *then* transfer.
 
@@ -97,9 +99,9 @@ sequenceDiagram
     C->>SW: "This is Margaret" (ASR)
     Note over SW: LLM decides to call<br/>save_caller_name
     SW->>App: POST — function: save_caller_name<br/>args {name}, current global_data
-    App-->>SW: response text (for the LLM)<br/>+ actions [set_global_data]
-    Note over SW: global_data updated —<br/>LLM reads response, continues script
-    SW->>C: "Nice to meet you... allowance card?" (TTS)
+    App-->>SW: response text (for the LLM)<br/>+ actions [set_global_data, say]
+    Note over SW: global_data updated —<br/>say plays the scripted question verbatim
+    SW->>C: say: "Nice to meet you... allowance card?"
     Note over C,App: ...same round-trip for each tool:<br/>save_inquiry_type, save_zip_code, save_age...
     SW->>App: POST — function: transfer_to_agent
     App-->>SW: actions [set_global_data, say, SWML connect]
@@ -111,7 +113,7 @@ A SWAIG response has two parts, and the distinction matters:
 
 | Part | Who consumes it | What it's for |
 |---|---|---|
-| **`response`** (text) | The **LLM** | Instructions/data for the model's next turn — e.g. `"Zip code stored. Now say: 'Thank you. Can I get your current age?'"` The caller never hears this directly. |
+| **`response`** (text) | The **LLM** | Instructions/data for the model's next turn — e.g. `"Zip code stored. The system is asking the caller for their age. Wait for their answer, then call save_age."` The caller never hears this directly. |
 | **`action`** (list) | The **platform** | Deterministic operations executed in order: `set_global_data` (persist state), `say` (speak exact text), `SWML` (run verbs like `connect`), etc. |
 
 This split is the core design lever: anything that must happen *exactly* (persisting data, speaking a mandated phrase, transferring the call) goes in **actions**; anything conversational (what to ask next, how to phrase a re-ask) goes in the **response** for the LLM to act on.
@@ -132,8 +134,9 @@ def save_zip_code(args, raw_data):
     global_data = raw_data.get("global_data", {}) or {}
     global_data["caller_zip"] = digits
 
-    result = SwaigFunctionResult("Zip code stored. Now say: ...")
-    result.update_global_data(global_data)   # ← action: persist to global_data
+    result = SwaigFunctionResult("Zip code stored. The system is asking for the caller's age...")
+    result.update_global_data(global_data)              # ← action: persist to global_data
+    result.say("Thank you. Can I get your current age?")  # ← action: scripted question, verbatim
     return result
 ```
 
@@ -152,6 +155,10 @@ Five SWAIG functions. Every one that accepts data validates it server-side and p
 | `transfer_to_agent` | *(none)* | guard: `caller_name`, `caller_zip`, `caller_age` must all be saved; `TRANSFER_DESTINATION` must be configured | `transfer_status`, `transferred_at`, `data_complete` |
 
 Validation failures don't crash the flow — the tool returns a `response` telling the LLM exactly what to do ("Politely ask the caller to repeat their 5 digit zipcode, then call this tool again"), which produces the retry loops in the flow chart above.
+
+Three tools also attach a **`say` action** so the scripted lines from the spec play verbatim: `save_caller_name` asks the allowance-card question, `save_zip_code` asks for the age, and `transfer_to_agent` speaks the goodbye. The tool's `response` tells the LLM the question has already been asked, so it just waits for the answer.
+
+Every tool also declares **fillers** — short phrases like "Let me write that down…" that the platform speaks *while the webhook executes*, so the caller never hears dead air during a tool call. Fillers are per-language (`{"en-US": [...]}`) and picked at random per invocation, which keeps repeated saves from sounding robotic.
 
 ---
 
@@ -345,6 +352,6 @@ The last command should emit three actions in order — the complete transfer co
 
 1. **Every datum lands in `global_data` immediately.** Each answer is persisted by a tool call the moment it's heard — with a timestamp — so even a call that drops mid-flow leaves a usable partial record, and the post-prompt summary has ground truth to draw from.
 2. **Validate in code, steer with prose.** The LLM interprets messy speech ("two-thirty, forty-seven"), but the handlers are the gatekeepers: 5-digit ZIP and two-digit age are enforced server-side, and bad input turns into a precise re-ask instruction rather than bad data.
-3. **Exact phrases are `say` actions, never prompt hopes.** The one sentence the spec requires verbatim is played by the platform, not generated by the model.
+3. **Exact phrases are `say` actions, never prompt hopes.** Every sentence the spec requires verbatim — the allowance-card question, the age question, the goodbye — is played by the platform, not generated by the model. The prompt only contains what the LLM can actually control: word choice, question order, and tool calls. Vocal warmth is the TTS voice's job; spoken-digit normalization happens in ASR before the LLM sees text.
 4. **The transfer is guarded twice.** Prompt ordering *and* a code-level check of `global_data` — the mandatory final order (ZIP + age, then transfer) holds even if the model misbehaves.
 5. **One file, no database.** The call state lives in SignalWire's `global_data`; the app itself is stateless, so it scales horizontally and restarts safely mid-call.
