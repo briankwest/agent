@@ -248,7 +248,9 @@ class JuliaAgent(AgentBase):
     def __init__(self):
         super().__init__(
             name="Julia",
-            route="/julia"  # SWML endpoint path (matches AGENT_NAME default)
+            # SWML endpoint path — derived from AGENT_NAME so it matches the
+            # URL setup_swml_handler registers ({proxy}/{AGENT_NAME}).
+            route=f"/{os.getenv('AGENT_NAME', 'julia')}"
         )
 
         self._setup_prompts()
@@ -262,6 +264,20 @@ class JuliaAgent(AgentBase):
             "You are Julia, a patient and polite voice assistant. You collect "
             "eligibility information from senior citizen callers, then connect "
             "them to a live agent."
+        )
+
+        self.prompt_add_section(
+            "Demo Notice",
+            "IMPORTANT: This is a SignalWire demonstration, not a real Medicare "
+            "or insurance service.",
+            bullets=[
+                "The opening greeting is played automatically and already told "
+                "the caller this is a SignalWire demo and to use made-up "
+                "details. Do not repeat the greeting or the disclaimer.",
+                "Never ask the caller to confirm or provide REAL personal "
+                "information. Treat the name, ZIP code, and age purely as demo "
+                "values.",
+            ]
         )
 
         self.prompt_add_section(
@@ -292,8 +308,9 @@ class JuliaAgent(AgentBase):
             "Task and Goals",
             "Follow these steps in order:",
             bullets=[
-                "Greet the caller and ask for their name. When they give it, "
-                "call save_caller_name.",
+                "The automatic greeting has already welcomed the caller and "
+                "asked for their name. When the caller gives their (made-up) "
+                "name, call save_caller_name. Do not greet again.",
                 "When the caller answers the allowance card question, call "
                 "save_inquiry_type. If the answer was negative, briefly explain "
                 "this is a hotline to get qualified for the Part B giveback "
@@ -330,6 +347,19 @@ class JuliaAgent(AgentBase):
             ],
             numbered_bullets=True
         )
+
+        # Verbatim opening line spoken by the platform (NOT the LLM), so the
+        # SignalWire-demo disclaimer is identical on every call. no_barge keeps
+        # the caller from talking over it before it finishes.
+        self.set_params({
+            "static_greeting": (
+                "Hi, thank you for calling. Before we begin: this is a "
+                "SignalWire demo, not a real Medicare service, so please do "
+                "not share any real personal information. Feel free to make up "
+                "a name, zip code, and age. To get started, may I have your name?"
+            ),
+            "static_greeting_no_barge": True,
+        })
 
         # Voice configuration (one-time agent state, so it belongs in __init__,
         # NOT in on_swml_request - add_language/add_hints append per call)
@@ -641,7 +671,7 @@ def create_server(port=None):
     server = AgentServer(host=HOST, port=port or PORT)
 
     agent = JuliaAgent()
-    server.register(agent, "/julia")
+    server.register(agent, f"/{os.getenv('AGENT_NAME', 'julia')}")
 
     @server.app.get("/health")
     def health_check():
@@ -688,8 +718,9 @@ def create_server(port=None):
                 "address": swml_handler_info["address"]
             }
         except Exception as e:
+            # Log the detail server-side; don't leak internals to the caller.
             logger.error(f"Token request failed: {e}")
-            return JSONResponse(status_code=500, content={"error": str(e)})
+            return JSONResponse(status_code=500, content={"error": "token request failed"})
 
     @server.app.on_event("startup")
     async def on_startup():
